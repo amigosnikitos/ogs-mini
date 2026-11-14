@@ -6,21 +6,44 @@ permissions:
   contents: write
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+
       - name: Unpack project
-        run: unzip -q OgsMini.zip
+        run: |
+          ls -la
+          Z=$(find . -maxdepth 3 -name '*.zip' | sort | tail -n 1)
+          echo "Archive: $Z"
+          [ -n "$Z" ] || { echo "ZIP file not found in the repository"; exit 1; }
+          unzip -qo "$Z"
+          ls -la OgsMini
+
       - name: Build debug APK
         working-directory: OgsMini
         run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          ./gradlew :app:assembleDebug --no-daemon --console=plain --stacktrace 2>&1 | tee ../build.log
+
+      - name: Show errors
+        if: failure()
+        run: |
+          touch build.log
+          {
+            echo '## Build errors'
+            echo '```'
+            grep -nE '^e: |error:|ERROR|What went wrong|Could not|not accepted|SDK location|FAILED' -A3 build.log | head -60 || true
+            echo '--- end of log ---'
+            tail -n 25 build.log
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Publish APK to Releases
         uses: softprops/action-gh-release@v2
         with:
