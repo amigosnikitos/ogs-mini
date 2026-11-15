@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+# Если за короткое время сделано несколько пушей, нужна только сборка последнего
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -14,13 +18,25 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
 
-      - name: Build debug APK
+      - name: Unit tests and debug APK
         working-directory: OgsMini
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon --console=plain --stacktrace 2>&1 | tee ../build.log
+          ./gradlew :core:test :app:assembleDebug --no-daemon --console=plain --stacktrace 2>&1 | tee ../build.log
+
+      - name: Test summary
+        if: always()
+        run: |
+          {
+            echo '## Core tests'
+            for f in OgsMini/core/build/test-results/test/*.xml; do
+              [ -f "$f" ] || continue
+              echo "$(basename "$f"): $(grep -o -m1 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' "$f")"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Show errors
         if: failure()

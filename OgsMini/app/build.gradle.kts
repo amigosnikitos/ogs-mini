@@ -12,8 +12,19 @@ android {
         applicationId = "com.example.ogsmini"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
+    }
+
+    // Постоянный ключ подписи. GitHub собирает приложение на новой машине каждый раз, и без общего ключа
+    // Android не даёт поставить новую сборку поверх старой. Ключ лежит в репозитории открыто: приложение личное.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

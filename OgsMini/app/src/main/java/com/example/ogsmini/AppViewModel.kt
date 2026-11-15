@@ -74,7 +74,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val REDIRECT_URI = "gobo://callback"
         private const val TAG = "OgsMini"
-        private const val VERSION = "0.1"
+        private const val VERSION = "0.2"
     }
 
     private val store = Store(app)
