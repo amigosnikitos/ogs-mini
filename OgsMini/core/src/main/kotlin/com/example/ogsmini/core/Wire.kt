@@ -70,6 +70,8 @@ data class GameData(
     val initialBlack: String,
     val initialWhite: String,
     val removed: String,
+    /** Фора ставится самим игроком (чёрные делают подряд [handicap] ходов), а не стоит заранее на звёздных точках. */
+    val freeHandicap: Boolean = false,
 )
 
 data class MoveEvent(val moveNumber: Int?, val x: Int, val y: Int)
@@ -145,6 +147,7 @@ object Wire {
             initialBlack = init?.str("black") ?: "",
             initialWhite = init?.str("white") ?: "",
             removed = o.str("removed") ?: "",
+            freeHandicap = o.bool("free_handicap_placement") ?: false,
         )
     }
 

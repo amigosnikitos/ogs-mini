@@ -14,6 +14,11 @@ class GameSession(val gameId: Long) {
         private set
     var moveCount: Int = 0
         private set
+    /**
+     * Чей сейчас ход. Считается только по списку ходов, начальному игроку и форе — как в движке официального
+     * клиента OGS. Сообщения о часах (`current_player`) на это не влияют: сервер может прислать их раньше
+     * самого хода, и тогда камень лёг бы чужим цветом.
+     */
     var toPlay: Stone = Stone.BLACK
         private set
     var phase: String = "loading"
@@ -37,18 +42,22 @@ class GameSession(val gameId: Long) {
 
     private var lastX = -2
     private var lastY = -2
+    private var handicap = 0
+    private var freeHandicap = false
 
     val loaded: Boolean get() = data != null
 
     fun applyGameData(d: GameData) {
         data = d
+        handicap = d.handicap
+        freeHandicap = d.freeHandicap
         val b = GoBoard(d.width, d.height)
         for ((x, y) in Coord.decodeAll(d.initialBlack)) b.setStone(x, y, Stone.BLACK)
         for ((x, y) in Coord.decodeAll(d.initialWhite)) b.setStone(x, y, Stone.WHITE)
         var color = d.initialPlayer
-        for (m in d.moves) {
+        for ((i, m) in d.moves.withIndex()) {
             b.play(m.x, m.y, color)
-            color = color.other
+            color = nextToPlay(color, i)
         }
         board = b
         moveCount = d.moves.size
@@ -60,7 +69,6 @@ class GameSession(val gameId: Long) {
         clock = d.clock
         outcome = d.outcome
         setRemoved(d.removed)
-        syncTurnWithClock()
     }
 
     /**
@@ -75,8 +83,9 @@ class GameSession(val gameId: Long) {
             if (number < moveCount) return MoveResult.IGNORED
             if (number == moveCount && x == lastX && y == lastY) return MoveResult.IGNORED
         }
-        board.play(x, y, toPlay)
-        toPlay = toPlay.other
+        val mover = toPlay
+        board.play(x, y, mover)
+        toPlay = nextToPlay(mover, moveCount)
         moveCount++
         lastX = x
         lastY = y
@@ -86,7 +95,6 @@ class GameSession(val gameId: Long) {
     fun applyClock(c: ClockInfo, localNowMs: Long) {
         clock = c
         c.nowMs?.let { clockOffsetMs = it - localNowMs }
-        syncTurnWithClock()
     }
 
     fun applyPhase(p: String) {
@@ -117,10 +125,15 @@ class GameSession(val gameId: Long) {
             .toSet()
     }
 
-    private fun syncTurnWithClock() {
-        val cp = clock?.currentPlayer ?: return
-        val d = data ?: return
-        if (cp == d.black?.id) toPlay = Stone.BLACK else if (cp == d.white?.id) toPlay = Stone.WHITE
+    /**
+     * Кто ходит после хода игрока [mover], если до этого хода было сыграно [movesBefore] ходов.
+     * Обычно очередь переходит к сопернику. Исключение — фора, которую чёрные расставляют сами
+     * (`free_handicap_placement`): они делают подряд [handicap] ходов. Это то же правило, что в движке
+     * официального клиента OGS.
+     */
+    private fun nextToPlay(mover: Stone, movesBefore: Int): Stone {
+        val handicapMovesLeft = if (freeHandicap) maxOf(0, handicap - movesBefore) else 0
+        return if (handicapMovesLeft < 2) mover.other else mover
     }
 
     // ---------- вопросы для интерфейса ----------

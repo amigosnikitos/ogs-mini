@@ -99,8 +99,11 @@ class WireTest {
                "black_time":{"thinking_time":119},"white_time":{"thinking_time":99}}]""") as Incoming.Event).data
         )!!
         s.applyClock(c, last + 400)
-        assertEquals(Stone.BLACK, s.toPlay)
+        // очередь считается по ходам, а не по часам: после трёх ходов по-прежнему ходят белые
+        assertEquals(Stone.WHITE, s.toPlay)
         assertEquals(100L, s.clockOffsetMs)
+        // время белых по-прежнему идёт: 99 с минус (500 мс на устройстве + сдвиг часов 100 мс)
+        assertEquals(98.4, s.remainingSeconds(Stone.WHITE, last + 500)!!, 0.001)
     }
 
     @Test

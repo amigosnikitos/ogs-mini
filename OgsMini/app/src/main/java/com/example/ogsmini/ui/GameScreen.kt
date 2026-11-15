@@ -76,7 +76,12 @@ fun GameScreen(
 
                 if (ui.loaded) {
                     GoBoardView(ui, onTap, Modifier.fillMaxWidth())
-                    Text("Ходов сыграно: ${ui.moveCount}", style = MaterialTheme.typography.bodySmall)
+                    val role = when (ui.myColor) {
+                        Stone.BLACK -> " · вы играете чёрными"
+                        Stone.WHITE -> " · вы играете белыми"
+                        null -> ""
+                    }
+                    Text("Ходов сыграно: ${ui.moveCount}$role", style = MaterialTheme.typography.bodySmall)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
