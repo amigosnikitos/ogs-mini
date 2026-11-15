@@ -15,15 +15,6 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Unpack project
-        run: |
-          ls -la
-          Z=$(find . -maxdepth 3 -name '*.zip' | sort | tail -n 1)
-          echo "Archive: $Z"
-          [ -n "$Z" ] || { echo "ZIP file not found in the repository"; exit 1; }
-          unzip -qo "$Z"
-          ls -la OgsMini
-
       - name: Build debug APK
         working-directory: OgsMini
         run: |
