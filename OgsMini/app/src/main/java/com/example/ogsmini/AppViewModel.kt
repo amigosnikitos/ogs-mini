@@ -5,12 +5,21 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ogsmini.core.ChallengeFilter
+import com.example.ogsmini.core.ChallengeRow
+import com.example.ogsmini.core.ChallengeWire
 import com.example.ogsmini.core.Coord
+import com.example.ogsmini.core.CreatedChallenge
 import com.example.ogsmini.core.GameSession
 import com.example.ogsmini.core.GameSummary
+import com.example.ogsmini.core.NewChallenge
 import com.example.ogsmini.core.PlayCheck
 import com.example.ogsmini.core.Pkce
+import com.example.ogsmini.core.Ranks
 import com.example.ogsmini.core.RemovedEvent
+import com.example.ogsmini.core.Seek
+import com.example.ogsmini.core.SeekGraph
+import com.example.ogsmini.core.SeekMessage
 import com.example.ogsmini.core.Stone
 import com.example.ogsmini.core.Tokens
 import com.example.ogsmini.core.Wire
@@ -33,6 +42,9 @@ sealed interface Screen {
     data object Login : Screen
     data object Games : Screen
     data class Game(val id: Long) : Screen
+    data object Challenges : Screen
+    data object CreateChallenge : Screen
+    data object Waiting : Screen
 }
 
 data class LoginUi(val busy: Boolean = false, val error: String? = null)
@@ -40,6 +52,42 @@ data class LoginUi(val busy: Boolean = false, val error: String? = null)
 data class GamesUi(
     val loading: Boolean = false,
     val games: List<GameSummary> = emptyList(),
+    val error: String? = null,
+)
+
+/** Список открытых вызовов: уже отфильтрованный и разложенный по вкладкам. */
+data class ChallengesUi(
+    val connected: Boolean = false,
+    val live: List<ChallengeRow> = emptyList(),
+    val correspondence: List<ChallengeRow> = emptyList(),
+    /** Сколько вызовов скрыто фильтрами. */
+    val hiddenCount: Int = 0,
+    /** Сколько командных (рэнго) вызовов не показано: такие партии приложение пока не умеет. */
+    val rengoHidden: Int = 0,
+    val filter: ChallengeFilter = ChallengeFilter(),
+    val tab: Int = 0,
+    /** Вызов, который сейчас принимается или снимается. */
+    val busyId: Long? = null,
+    val error: String? = null,
+    val myRank: Int = 18,
+)
+
+data class CreateUi(
+    val form: NewChallenge = NewChallenge(),
+    val busy: Boolean = false,
+    val error: String? = null,
+    val myRank: Int = 18,
+)
+
+/** Ожидание соперника для только что созданного вызова. */
+data class WaitingUi(
+    val challengeId: Long,
+    val gameId: Long,
+    val summary: String,
+    /** Кому адресован вызов; null — открытый вызов. */
+    val opponent: String?,
+    val seconds: Int = 0,
+    val connected: Boolean = true,
     val error: String? = null,
 )
 
@@ -74,7 +122,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val REDIRECT_URI = "gobo://callback"
         private const val TAG = "OgsMini"
-        private const val VERSION = "0.2"
+        private const val VERSION = "0.3"
     }
 
     private val store = Store(app)
@@ -110,6 +158,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _game = MutableStateFlow<GameUi?>(null)
     val game: StateFlow<GameUi?> = _game.asStateFlow()
 
+    private val _challenges = MutableStateFlow(
+        ChallengesUi(
+            filter = ChallengeFilter.fromBits(store.challengeFilterBits),
+            tab = store.challengeTab.coerceIn(0, 1),
+            myRank = store.userRank,
+        )
+    )
+    val challenges: StateFlow<ChallengesUi> = _challenges.asStateFlow()
+
+    private val _create = MutableStateFlow(
+        CreateUi(form = NewChallenge.decode(store.challengeForm) ?: NewChallenge(), myRank = store.userRank)
+    )
+    val create: StateFlow<CreateUi> = _create.asStateFlow()
+
+    private val _waiting = MutableStateFlow<WaitingUi?>(null)
+    val waiting: StateFlow<WaitingUi?> = _waiting.asStateFlow()
+
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
@@ -124,6 +189,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lastResyncMs = 0L
     private var tickJob: Job? = null
     private var moveTimeoutJob: Job? = null
+
+    private val graph = SeekGraph()
+    private var seekSubscribed = false
+    private var keepaliveJob: Job? = null
+    private var goneJob: Job? = null
+    private var waitingStartedMs = 0L
+    private var lastGamesLoadMs = 0L
+    private var createFromGames = false
 
     init {
         if (store.accessToken != null) bootstrap()
@@ -196,9 +269,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 store.userId = cfg.userId
                 store.username = cfg.username
+                store.userRank = cfg.rank
                 jwt = cfg.jwt
                 _login.value = LoginUi()
-                _screen.value = Screen.Games
+                go(Screen.Games)
                 socket.connect(cfg.jwt, store.deviceId, VERSION)
                 loadGames()
             } catch (e: Exception) {
@@ -216,6 +290,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val cfg = withContext(Dispatchers.IO) { api.config(token) }
                 store.userId = cfg.userId
                 store.username = cfg.username
+                store.userRank = cfg.rank
                 jwt = cfg.jwt
                 socket.connect(cfg.jwt, store.deviceId, VERSION)
                 loadGames()
@@ -236,9 +311,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tickJob?.cancel()
         socketReady = false
         store.clearSession()
+        stopKeepalive()
+        goneJob?.cancel()
+        _waiting.value = null
         _game.value = null
         _games.value = GamesUi()
-        _screen.value = Screen.Login
+        go(Screen.Login)
         if (note != null) _login.value = LoginUi(error = note)
     }
 
@@ -251,6 +329,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadGames() {
         val token = store.accessToken ?: return
+        lastGamesLoadMs = System.currentTimeMillis()
         _games.value = _games.value.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
@@ -271,7 +350,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         session = GameSession(id)
         pending = -1
         awaitingMove = false
-        _screen.value = Screen.Game(id)
+        go(Screen.Game(id))
         publish()
         socket.send(Wire.gameConnect(id))
         tickJob?.cancel()
@@ -290,23 +369,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tickJob?.cancel()
         moveTimeoutJob?.cancel()
         _game.value = null
-        _screen.value = Screen.Games
+        go(Screen.Games)
         loadGames()
     }
 
     private fun handleReady() {
         socketReady = true
         session?.let { socket.send(Wire.gameConnect(it.gameId)) }
+        if (seekSubscribed) {
+            graph.clear()
+            socket.send(ChallengeWire.seekConnect())
+        }
+        _waiting.value?.let { socket.send(Wire.gameConnect(it.gameId)) }
         publish()
+        publishChallenges()
     }
 
     private fun handleDisconnected(reason: String) {
         Log.d(TAG, "socket down: $reason")
         socketReady = false
         publish()
+        publishChallenges()
     }
 
     private fun handleEvent(name: String, data: JsonElement) {
+        when {
+            name == "seekgraph/global" -> onSeekGraph(data)
+            name == "notification" -> onNotification(data)
+            name == "active_game" -> onActiveGame()
+            else -> {
+                val w = _waiting.value
+                if (w != null && name == "game/${w.gameId}/gamedata") onWaitingStarted(w.gameId)
+                else handleGameEvent(name, data)
+            }
+        }
+    }
+
+    private fun handleGameEvent(name: String, data: JsonElement) {
         val s = session ?: return
         val prefix = "game/${s.gameId}/"
         if (!name.startsWith(prefix)) return
@@ -425,6 +524,309 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (s.phase != "stone removal" || s.myColor(store.userId) == null) return
         socket.send(Wire.removedAccept(s.gameId, s.removedRaw))
         say("Вы приняли результат подсчёта")
+    }
+
+    // ------------------------------------------------------------------ вызовы
+
+    /** Любое переключение экрана идёт через эту функцию: она заодно подписывает сокет на список вызовов или отписывает. */
+    private fun go(next: Screen) {
+        _screen.value = next
+        updateSeekSubscription()
+    }
+
+    private fun updateSeekSubscription() {
+        val want = when (_screen.value) {
+            is Screen.Challenges, is Screen.CreateChallenge, is Screen.Waiting -> true
+            else -> false
+        }
+        if (want == seekSubscribed) return
+        seekSubscribed = want
+        graph.clear()
+        if (want) {
+            if (socketReady) socket.send(ChallengeWire.seekConnect())
+        } else {
+            socket.send(ChallengeWire.seekDisconnect())
+        }
+        publishChallenges()
+    }
+
+    private fun publishChallenges() {
+        val cur = _challenges.value
+        val all = graph.rows(store.userId, store.userRank)
+        val shown = all.filter { cur.filter.matches(it) }
+        _challenges.value = cur.copy(
+            connected = socketReady && seekSubscribed,
+            live = shown.filter { it.c.live },
+            correspondence = shown.filter { !it.c.live },
+            hiddenCount = all.size - shown.size,
+            rengoHidden = graph.rengoCount(),
+            myRank = store.userRank,
+        )
+    }
+
+    private fun onSeekGraph(data: JsonElement) {
+        if (!seekSubscribed) return
+        val messages = Seek.parse(data)
+        val me = store.userId
+
+        val w = _waiting.value
+        if (w != null) {
+            val started = messages.firstOrNull { it is SeekMessage.Started && it.challengeId == w.challengeId }
+            if (started != null) {
+                onWaitingStarted((started as SeekMessage.Started).gameId ?: w.gameId)
+                return
+            }
+            if (messages.any { it is SeekMessage.Remove && it.challengeId == w.challengeId }) scheduleGoneCheck(w)
+        } else if (_screen.value is Screen.Challenges) {
+            val acceptedMine = messages.any {
+                it is SeekMessage.Started && graph[it.challengeId]?.userId == me
+            }
+            if (acceptedMine) say("Ваш вызов приняли — партия появится в «Мои партии»")
+        }
+        graph.apply(messages)
+        publishChallenges()
+    }
+
+    private fun onNotification(data: JsonElement) {
+        val rejected = ChallengeWire.parseOfferRejected(data) ?: return
+        val w = _waiting.value ?: return
+        if (rejected.first != null && rejected.first != w.gameId) return
+        stopKeepalive()
+        _waiting.value = w.copy(error = "Соперник отклонил вызов" + (rejected.second?.let { ": $it" } ?: ""))
+    }
+
+    /** Сервер сообщает о новой партии пользователя: если открыт список партий, обновляем его. */
+    private fun onActiveGame() {
+        if (_screen.value !is Screen.Games) return
+        if (System.currentTimeMillis() - lastGamesLoadMs < 3000) return
+        loadGames()
+    }
+
+    fun openChallenges() {
+        _challenges.value = _challenges.value.copy(error = null, busyId = null)
+        go(Screen.Challenges)
+    }
+
+    fun closeChallenges() {
+        go(Screen.Games)
+        loadGames()
+    }
+
+    fun setFilter(filter: ChallengeFilter) {
+        store.challengeFilterBits = filter.toBits()
+        _challenges.value = _challenges.value.copy(filter = filter)
+        publishChallenges()
+    }
+
+    fun setTab(tab: Int) {
+        store.challengeTab = tab
+        _challenges.value = _challenges.value.copy(tab = tab)
+    }
+
+    fun dismissChallengesError() {
+        _challenges.value = _challenges.value.copy(error = null)
+    }
+
+    /** Ответ на сбой запроса: при просроченном токене разлогиниваем, иначе возвращаем текст для показа. */
+    private fun failText(e: Exception): String {
+        if (e is ApiException && e.code == 401) {
+            logout("Сессия истекла, войдите снова")
+            return ""
+        }
+        return errorText(e)
+    }
+
+    fun acceptChallenge(id: Long) {
+        val token = store.accessToken ?: return
+        val challenge = graph[id] ?: return
+        if (_challenges.value.busyId != null) return
+        _challenges.value = _challenges.value.copy(busyId = id, error = null)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.acceptChallenge(token, id) }
+                _challenges.value = _challenges.value.copy(busyId = null)
+                openGame(challenge.gameId)
+            } catch (e: Exception) {
+                _challenges.value = _challenges.value.copy(busyId = null, error = failText(e))
+            }
+        }
+    }
+
+    /** Снять свой вызов из списка. */
+    fun cancelChallenge(id: Long) {
+        val token = store.accessToken ?: return
+        if (_challenges.value.busyId != null) return
+        _challenges.value = _challenges.value.copy(busyId = id, error = null)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.cancelChallenge(token, id) }
+                graph.apply(listOf(SeekMessage.Remove(id)))
+                _challenges.value = _challenges.value.copy(busyId = null)
+                publishChallenges()
+            } catch (e: ApiException) {
+                if (e.code == 404) { // вызова уже нет — это и требовалось
+                    graph.apply(listOf(SeekMessage.Remove(id)))
+                    _challenges.value = _challenges.value.copy(busyId = null)
+                    publishChallenges()
+                } else {
+                    _challenges.value = _challenges.value.copy(busyId = null, error = failText(e))
+                }
+            } catch (e: Exception) {
+                _challenges.value = _challenges.value.copy(busyId = null, error = failText(e))
+            }
+        }
+    }
+
+    // ---- форма создания
+
+    /** Форму можно открыть и со списка партий, и со списка вызовов; «Назад» возвращает туда, откуда пришли. */
+    fun openCreate() {
+        createFromGames = _screen.value is Screen.Games
+        _create.value = _create.value.copy(error = null, busy = false, myRank = store.userRank)
+        go(Screen.CreateChallenge)
+    }
+
+    fun backFromCreate() {
+        if (createFromGames) {
+            go(Screen.Games)
+            loadGames()
+        } else {
+            go(Screen.Challenges)
+        }
+    }
+
+    fun updateForm(change: (NewChallenge) -> NewChallenge) {
+        val cur = _create.value
+        _create.value = cur.copy(form = change(cur.form).normalized(), error = null)
+    }
+
+    /** Включить или выключить ограничение рангов; при включении предлагаем диапазон вокруг своего ранга. */
+    fun setRestrictRank(on: Boolean) {
+        val my = store.userRank
+        updateForm {
+            if (on) {
+                it.copy(
+                    restrictRank = true,
+                    minRank = maxOf(Ranks.MIN, my - 3),
+                    maxRank = minOf(Ranks.MAX, my + 3),
+                )
+            } else {
+                it.copy(restrictRank = false)
+            }
+        }
+    }
+
+    fun submitChallenge() {
+        val token = store.accessToken ?: return
+        val cur = _create.value
+        if (cur.busy) return
+        val form = cur.form.normalized()
+        val problem = form.problem()
+        if (problem != null) {
+            _create.value = cur.copy(form = form, error = problem)
+            return
+        }
+        _create.value = cur.copy(form = form, busy = true, error = null)
+        viewModelScope.launch {
+            try {
+                val opponent = form.opponent.trim()
+                val created = withContext(Dispatchers.IO) {
+                    val playerId = if (opponent.isEmpty()) {
+                        null
+                    } else {
+                        api.findPlayer(token, opponent)?.id ?: throw ApiException(0, "Игрок «$opponent» не найден")
+                    }
+                    api.createChallenge(token, form.requestBody(), playerId)
+                }
+                store.challengeForm = form.encode()
+                // Имя соперника не запоминаем: следующий вызов по умолчанию открытый
+                _create.value = _create.value.copy(busy = false, form = _create.value.form.copy(opponent = ""))
+                when {
+                    form.live -> startWaiting(form, created, opponent.ifEmpty { null })
+                    opponent.isEmpty() -> {
+                        say("Вызов создан и виден в списке, пока его кто-нибудь не примет")
+                        go(Screen.Challenges)
+                    }
+                    else -> {
+                        say("Вызов отправлен игроку $opponent")
+                        go(Screen.Challenges)
+                    }
+                }
+            } catch (e: Exception) {
+                _create.value = _create.value.copy(busy = false, error = failText(e))
+            }
+        }
+    }
+
+    // ---- ожидание соперника
+
+    private fun startWaiting(form: NewChallenge, created: CreatedChallenge, opponent: String?) {
+        stopKeepalive()
+        goneJob?.cancel()
+        waitingStartedMs = System.currentTimeMillis()
+        _waiting.value = WaitingUi(created.challengeId, created.gameId, form.summary(), opponent)
+        go(Screen.Waiting)
+        socket.send(Wire.gameConnect(created.gameId))
+        // Пока вызов быстрой партии ждёт соперника, сервер требует раз в секунду подтверждать, что мы здесь.
+        keepaliveJob = viewModelScope.launch {
+            while (true) {
+                val w = _waiting.value ?: break
+                if (w.error != null) break
+                socket.send(ChallengeWire.keepalive(w.challengeId, w.gameId))
+                _waiting.value = w.copy(
+                    seconds = ((System.currentTimeMillis() - waitingStartedMs) / 1000).toInt(),
+                    connected = socketReady,
+                )
+                delay(1000)
+            }
+        }
+    }
+
+    private fun stopKeepalive() {
+        keepaliveJob?.cancel()
+        keepaliveJob = null
+    }
+
+    /** Вызов исчез из списка: если партия сразу не началась, значит, сервер его снял. */
+    private fun scheduleGoneCheck(w: WaitingUi) {
+        goneJob?.cancel()
+        goneJob = viewModelScope.launch {
+            delay(3000)
+            val cur = _waiting.value
+            if (cur != null && cur.challengeId == w.challengeId && cur.error == null) {
+                stopKeepalive()
+                _waiting.value = cur.copy(error = "Сервер снял вызов: его отменили или пропала связь. Создайте вызов заново.")
+            }
+        }
+    }
+
+    private fun onWaitingStarted(gameId: Long) {
+        stopKeepalive()
+        goneJob?.cancel()
+        _waiting.value = null
+        openGame(gameId)
+    }
+
+    /** Отмена ожидания (кнопка или «Назад»): снимаем вызов и возвращаемся к списку. */
+    fun cancelWaiting() {
+        val w = _waiting.value ?: return
+        stopKeepalive()
+        goneJob?.cancel()
+        _waiting.value = null
+        socket.send(Wire.gameDisconnect(w.gameId))
+        go(Screen.Challenges)
+        val token = store.accessToken ?: return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.cancelChallenge(token, w.challengeId) }
+            } catch (e: ApiException) {
+                if (e.code != 404) {
+                    _challenges.value = _challenges.value.copy(error = "Не удалось снять вызов: ${failText(e)}")
+                }
+            } catch (e: Exception) {
+                _challenges.value = _challenges.value.copy(error = "Не удалось снять вызов: ${failText(e)}")
+            }
+        }
     }
 
     // ------------------------------------------------------------------ снимок для интерфейса

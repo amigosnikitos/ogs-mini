@@ -78,7 +78,8 @@ data class MoveEvent(val moveNumber: Int?, val x: Int, val y: Int)
 
 data class RemovedEvent(val removed: Boolean, val stones: String, val allRemoved: String?)
 
-data class UiConfig(val userId: Long, val username: String, val jwt: String)
+/** [rank] — ранг игрока по шкале сайта (5 = 25k … 30 = 1d … 38 = 9d); по нему проверяется допуск к вызовам. */
+data class UiConfig(val userId: Long, val username: String, val jwt: String, val rank: Int = 18)
 
 data class Tokens(val access: String, val refresh: String?, val expiresInSec: Long?)
 
@@ -217,7 +218,9 @@ object Wire {
         val user = o.obj("user") ?: return null
         val id = user.long("id") ?: return null
         val jwt = o.str("user_jwt") ?: return null
-        return UiConfig(id, user.str("username") ?: "#$id", jwt)
+        val rating = user.obj("ratings")?.obj("overall")?.dbl("rating")
+        val rank = Ranks.bounded(rating, user.dbl("ranking"))
+        return UiConfig(id, user.str("username") ?: "#$id", jwt, rank)
     }
 
     fun parseTokens(root: JsonElement): Tokens? {
@@ -250,11 +253,11 @@ object Wire {
     }
 
     /** Человекочитаемый текст ошибки из тела ответа REST/OAuth. */
-    fun describeError(body: String, code: Int): String {
+    fun describeError(body: String, code: Int, limit: Int = 120): String {
         val o = parseJson(body) as? JsonObject
         val msg = o?.str("error_description") ?: o?.str("detail") ?: o?.str("error")
         if (msg != null) return msg
-        val tail = body.trim().take(120)
+        val tail = body.trim().take(limit)
         return if (tail.isEmpty()) "HTTP $code" else "HTTP $code: $tail"
     }
 

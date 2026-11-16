@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.ogsmini"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
     }
 
     // Постоянный ключ подписи. GitHub собирает приложение на новой машине каждый раз, и без общего ключа

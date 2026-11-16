@@ -1,6 +1,7 @@
 package com.example.ogsmini
 
 import android.content.Context
+import com.example.ogsmini.core.ChallengeFilter
 import java.util.UUID
 
 /** Настройки и токены в SharedPreferences (резервное копирование отключено в манифесте). */
@@ -41,6 +42,32 @@ class Store(context: Context) {
     var pkceState: String?
         get() = read("pkce_state")
         set(v) = write("pkce_state", v)
+
+    /** Ранг игрока по шкале сайта; нужен, чтобы понимать, какие вызовы вам доступны. */
+    var userRank: Int
+        get() = prefs.getInt("user_rank", 18)
+        set(v) {
+            prefs.edit().putInt("user_rank", v).apply()
+        }
+
+    /** Выбранные фильтры списка вызовов (битовая маска, см. ChallengeFilter). */
+    var challengeFilterBits: Int
+        get() = prefs.getInt("challenge_filter", ChallengeFilter().toBits())
+        set(v) {
+            prefs.edit().putInt("challenge_filter", v).apply()
+        }
+
+    /** Открытая вкладка списка вызовов: 0 — быстрые, 1 — заочные. */
+    var challengeTab: Int
+        get() = prefs.getInt("challenge_tab", 0)
+        set(v) {
+            prefs.edit().putInt("challenge_tab", v).apply()
+        }
+
+    /** Последняя использованная форма «Создать вызов» (JSON). */
+    var challengeForm: String?
+        get() = read("challenge_form")
+        set(v) = write("challenge_form", v)
 
     val deviceId: String
         get() = read("device_id") ?: UUID.randomUUID().toString().also { write("device_id", it) }

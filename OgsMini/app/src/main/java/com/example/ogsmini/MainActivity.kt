@@ -14,9 +14,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ogsmini.ui.ChallengesScreen
+import com.example.ogsmini.ui.CreateChallengeScreen
 import com.example.ogsmini.ui.GameScreen
 import com.example.ogsmini.ui.GamesScreen
 import com.example.ogsmini.ui.LoginScreen
+import com.example.ogsmini.ui.WaitingScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -53,6 +56,9 @@ private fun App(vm: AppViewModel, openUrl: (String) -> Unit) {
     val login by vm.login.collectAsStateWithLifecycle()
     val games by vm.games.collectAsStateWithLifecycle()
     val game by vm.game.collectAsStateWithLifecycle()
+    val challenges by vm.challenges.collectAsStateWithLifecycle()
+    val create by vm.create.collectAsStateWithLifecycle()
+    val waiting by vm.waiting.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
@@ -64,6 +70,9 @@ private fun App(vm: AppViewModel, openUrl: (String) -> Unit) {
     }
 
     BackHandler(enabled = screen is Screen.Game) { vm.closeGame() }
+    BackHandler(enabled = screen is Screen.Challenges) { vm.closeChallenges() }
+    BackHandler(enabled = screen is Screen.CreateChallenge) { vm.backFromCreate() }
+    BackHandler(enabled = screen is Screen.Waiting) { vm.cancelWaiting() }
 
     when (val s = screen) {
         is Screen.Login -> LoginScreen(
@@ -79,6 +88,32 @@ private fun App(vm: AppViewModel, openUrl: (String) -> Unit) {
             onOpen = vm::openGame,
             onRefresh = vm::loadGames,
             onLogout = { vm.logout() },
+            onChallenges = vm::openChallenges,
+            onCreate = vm::openCreate,
+        )
+
+        is Screen.Challenges -> ChallengesScreen(
+            state = challenges,
+            onBack = vm::closeChallenges,
+            onCreate = vm::openCreate,
+            onTab = vm::setTab,
+            onFilter = vm::setFilter,
+            onAccept = vm::acceptChallenge,
+            onCancel = vm::cancelChallenge,
+            onDismissError = vm::dismissChallengesError,
+        )
+
+        is Screen.CreateChallenge -> CreateChallengeScreen(
+            state = create,
+            onBack = vm::backFromCreate,
+            onChange = vm::updateForm,
+            onRestrictRank = vm::setRestrictRank,
+            onSubmit = vm::submitChallenge,
+        )
+
+        is Screen.Waiting -> WaitingScreen(
+            state = waiting,
+            onCancel = vm::cancelWaiting,
         )
 
         is Screen.Game -> GameScreen(
