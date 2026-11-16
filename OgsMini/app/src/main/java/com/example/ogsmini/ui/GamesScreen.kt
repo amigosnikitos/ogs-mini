@@ -40,7 +40,7 @@ fun GamesScreen(
     username: String,
     onOpen: (Long) -> Unit,
     onRefresh: () -> Unit,
-    onLogout: () -> Unit,
+    onMenu: () -> Unit,
     onChallenges: () -> Unit,
     onCreate: () -> Unit,
 ) {
@@ -50,9 +50,9 @@ fun GamesScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Мои партии") },
+                navigationIcon = { MenuButton(onMenu) },
                 actions = {
                     TextButton(onClick = onRefresh) { Text("Обновить") }
-                    TextButton(onClick = onLogout) { Text("Выйти") }
                 },
             )
         },

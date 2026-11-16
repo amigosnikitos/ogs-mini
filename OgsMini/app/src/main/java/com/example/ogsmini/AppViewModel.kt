@@ -122,7 +122,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val REDIRECT_URI = "gobo://callback"
         private const val TAG = "OgsMini"
-        private const val VERSION = "0.3"
+        private const val VERSION = "0.4"
     }
 
     private val store = Store(app)
@@ -177,6 +177,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    /** Выбранная тема: null — следовать системной, true — тёмная, false — светлая. */
+    private val _darkTheme = MutableStateFlow(store.darkTheme)
+    val darkTheme: StateFlow<Boolean?> = _darkTheme.asStateFlow()
+
+    fun setDarkTheme(on: Boolean) {
+        store.darkTheme = on
+        _darkTheme.value = on
+    }
 
     val clientId: String get() = store.clientId
     val username: String get() = store.username

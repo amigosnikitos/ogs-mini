@@ -69,6 +69,15 @@ class Store(context: Context) {
         get() = read("challenge_form")
         set(v) = write("challenge_form", v)
 
+    /** Тёмная тема: null — как в системе (пока пользователь сам не переключил), иначе его выбор. */
+    var darkTheme: Boolean?
+        get() = if (prefs.contains("dark_theme")) prefs.getBoolean("dark_theme", false) else null
+        set(v) {
+            val e = prefs.edit()
+            if (v == null) e.remove("dark_theme") else e.putBoolean("dark_theme", v)
+            e.apply()
+        }
+
     val deviceId: String
         get() = read("device_id") ?: UUID.randomUUID().toString().also { write("device_id", it) }
 

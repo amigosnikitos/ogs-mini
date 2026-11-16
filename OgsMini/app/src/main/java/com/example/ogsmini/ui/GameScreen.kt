@@ -1,13 +1,19 @@
 package com.example.ogsmini.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -26,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ogsmini.GameUi
@@ -70,8 +77,8 @@ fun GameScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val playing = ui.phase == "play"
-                PlayerLine("⚫", ui.blackName, ui.blackCaptures, ui.blackClock, playing && ui.toPlay == Stone.BLACK)
-                PlayerLine("⚪", ui.whiteName, ui.whiteCaptures, ui.whiteClock, playing && ui.toPlay == Stone.WHITE)
+                PlayerLine(Stone.BLACK, ui.blackName, ui.blackCaptures, ui.blackClock, playing && ui.toPlay == Stone.BLACK)
+                PlayerLine(Stone.WHITE, ui.whiteName, ui.whiteCaptures, ui.whiteClock, playing && ui.toPlay == Stone.WHITE)
                 Text(ui.status, style = MaterialTheme.typography.titleMedium)
 
                 if (ui.loaded) {
@@ -144,14 +151,24 @@ fun GameScreen(
     }
 }
 
+/** Камень рисуется кружком с рамкой, а не символом: чёрный камень должен быть виден и на тёмном фоне. */
 @Composable
-private fun PlayerLine(mark: String, name: String, captures: Int, clock: String?, active: Boolean) {
+private fun PlayerLine(stone: Stone, name: String, captures: Int, clock: String?, active: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text("$mark $name", fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
+        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .background(if (stone == Stone.BLACK) Color(0xFF111111) else Color(0xFFF7F7F2), CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(name, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
+        }
         Text(if (clock != null) "взято $captures · $clock" else "взято $captures")
     }
 }
