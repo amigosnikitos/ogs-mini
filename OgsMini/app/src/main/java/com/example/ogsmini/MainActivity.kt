@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ogsmini.ui.AppDrawer
 import com.example.ogsmini.ui.ChallengesScreen
 import com.example.ogsmini.ui.CreateChallengeScreen
+import com.example.ogsmini.ui.GameNav
 import com.example.ogsmini.ui.GameScreen
 import com.example.ogsmini.ui.GamesScreen
 import com.example.ogsmini.ui.LoginScreen
@@ -124,7 +125,7 @@ private fun App(vm: AppViewModel, dark: Boolean, openUrl: (String) -> Unit) {
     // Меню закрывается при любой смене экрана
     LaunchedEffect(screen) { drawerState.close() }
 
-    BackHandler(enabled = screen is Screen.Game) { vm.closeGame() }
+    BackHandler(enabled = screen is Screen.Game) { vm.backFromGame() }
     BackHandler(enabled = screen is Screen.Challenges) { vm.closeChallenges() }
     BackHandler(enabled = screen is Screen.CreateChallenge) { vm.backFromCreate() }
     BackHandler(enabled = screen is Screen.Waiting) { vm.cancelWaiting() }
@@ -191,7 +192,23 @@ private fun App(vm: AppViewModel, dark: Boolean, openUrl: (String) -> Unit) {
 
             is Screen.Game -> GameScreen(
                 ui = game,
-                onBack = vm::closeGame,
+                nav = GameNav(
+                    onFirst = vm::viewFirst,
+                    onPrev = vm::viewPrev,
+                    onNext = vm::viewNext,
+                    onLast = vm::viewLast,
+                    onSeek = vm::viewSeek,
+                    onLive = vm::viewLive,
+                    onToggleAnalysis = vm::toggleAnalysis,
+                    onAnalysisPass = vm::analysisPass,
+                    onDeleteBranch = vm::deleteBranch,
+                    onSiblingPrev = vm::siblingPrev,
+                    onSiblingNext = vm::siblingNext,
+                    onNode = vm::viewNode,
+                    onOpenTree = vm::openTree,
+                    onCloseTree = vm::closeTree,
+                ),
+                onBack = vm::backFromGame,
                 onTap = vm::onBoardTap,
                 onConfirm = vm::confirmMove,
                 onPass = vm::pass,

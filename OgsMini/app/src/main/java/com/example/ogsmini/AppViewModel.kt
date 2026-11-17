@@ -12,7 +12,9 @@ import com.example.ogsmini.core.Coord
 import com.example.ogsmini.core.CreatedChallenge
 import com.example.ogsmini.core.GameSession
 import com.example.ogsmini.core.GameSummary
+import com.example.ogsmini.core.GameTree
 import com.example.ogsmini.core.NewChallenge
+import com.example.ogsmini.core.NodeInfo
 import com.example.ogsmini.core.PlayCheck
 import com.example.ogsmini.core.Pkce
 import com.example.ogsmini.core.Ranks
@@ -115,6 +117,35 @@ data class GameUi(
     val status: String = "Загрузка партии…",
     val canMove: Boolean = false,
     val canRemove: Boolean = false,
+    // --- просмотр истории партии и анализ (варианты) ---
+    /** Номер показанной позиции: сколько ходов сыграно от начала. */
+    val viewMove: Int = 0,
+    /** Сколько ходов в показанной линии (для ползунка). */
+    val lineLength: Int = 0,
+    /** Сколько ходов в самой партии. */
+    val trunkLength: Int = 0,
+    /** Показана текущая позиция партии: можно ходить, видны пробный камень и отметки подсчёта. */
+    val live: Boolean = true,
+    val analysis: Boolean = false,
+    /** Показанная позиция лежит в варианте, а не в партии. */
+    val inVariation: Boolean = false,
+    val canPrev: Boolean = false,
+    val canNext: Boolean = false,
+    val canDelete: Boolean = false,
+    val hasVariations: Boolean = false,
+    /** Каким цветом ляжет следующий камень в анализе. */
+    val analysisColor: Stone = Stone.BLACK,
+    /** Последний ход показанной позиции: «Q10», «Пас» или пусто. */
+    val viewMoveLabel: String = "",
+    /** Продолжения показанной позиции, если их несколько (только в анализе). */
+    val choices: List<NodeInfo> = emptyList(),
+    /** Место показанного хода среди вариантов того же хода: 1..siblingCount. */
+    val siblingIndex: Int = 1,
+    val siblingCount: Int = 1,
+    /** Открыто окно со списком ходов и вариантов. */
+    val showTree: Boolean = false,
+    /** Содержимое этого окна; заполняется, только пока оно открыто. */
+    val outline: List<NodeInfo> = emptyList(),
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -122,7 +153,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val REDIRECT_URI = "gobo://callback"
         private const val TAG = "OgsMini"
-        private const val VERSION = "0.4"
+        private const val VERSION = "0.5"
     }
 
     private val store = Store(app)
@@ -195,6 +226,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var socketReady = false
     private var pending = -1
     private var awaitingMove = false
+    private var treeOpen = false
     private var lastResyncMs = 0L
     private var tickJob: Job? = null
     private var moveTimeoutJob: Job? = null
@@ -359,6 +391,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         session = GameSession(id)
         pending = -1
         awaitingMove = false
+        treeOpen = false
         go(Screen.Game(id))
         publish()
         socket.send(Wire.gameConnect(id))
@@ -375,11 +408,62 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val s = session
         if (s != null) socket.send(Wire.gameDisconnect(s.gameId))
         session = null
+        treeOpen = false
         tickJob?.cancel()
         moveTimeoutJob?.cancel()
         _game.value = null
         go(Screen.Games)
         loadGames()
+    }
+
+    /** «Назад» на экране партии: сначала выход из анализа, и только следующее нажатие закрывает партию. */
+    fun backFromGame() {
+        val t = session?.tree
+        if (t != null && t.analysis) {
+            t.exitAnalysis()
+            publish()
+        } else {
+            closeGame()
+        }
+    }
+
+    // ------------------------------------------------------------------ просмотр истории и варианты
+
+    private fun withTree(block: (GameTree) -> Unit) {
+        val t = session?.tree ?: return
+        block(t)
+        publish()
+    }
+
+    fun viewFirst() = withTree { it.first() }
+    fun viewPrev() = withTree { it.prev() }
+    fun viewNext() = withTree { it.next() }
+    fun viewLast() = withTree { it.last() }
+    fun viewSeek(index: Int) = withTree { it.seek(index) }
+
+    /** К текущей позиции партии; режим анализа выключается, построенные варианты остаются. */
+    fun viewLive() = withTree { it.goLive() }
+
+    fun toggleAnalysis() = withTree { if (it.analysis) it.exitAnalysis() else it.enterAnalysis() }
+    fun analysisPass() = withTree { it.pass() }
+    fun deleteBranch() = withTree { it.deleteBranch() }
+    fun siblingPrev() = withTree { it.moveSibling(-1) }
+    fun siblingNext() = withTree { it.moveSibling(1) }
+
+    /** Перейти к ходу или варианту из списка; окно со списком закрывается. */
+    fun viewNode(id: Int) {
+        treeOpen = false
+        withTree { t -> t.find(id)?.let { t.jumpTo(it) } }
+    }
+
+    fun openTree() {
+        treeOpen = true
+        publish()
+    }
+
+    fun closeTree() {
+        treeOpen = false
+        publish()
     }
 
     private fun handleReady() {
@@ -461,6 +545,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun onBoardTap(x: Int, y: Int) {
         val s = session ?: return
         if (!s.loaded) return
+        val t = s.tree
+        if (t != null && t.analysis) {
+            // Режим анализа: камень ложится в вариант, на сервер ничего не уходит
+            when (t.play(x, y)) {
+                PlayCheck.OK -> Unit
+                PlayCheck.OCCUPIED -> say("Эта точка занята")
+                PlayCheck.KO -> say("Здесь нельзя: ко")
+                PlayCheck.SUICIDE -> say("Здесь нельзя: самоубийство")
+                PlayCheck.OFF_BOARD -> Unit
+            }
+            publish()
+            return
+        }
+        if (t != null && !t.live) {
+            // Показана история: ходить и отмечать камни можно только в текущей позиции
+            if (s.phase == "stone removal" || s.isMyTurn(store.userId)) {
+                say("Сейчас показана история партии. Вернитесь к текущей позиции")
+            }
+            return
+        }
         val me = s.myColor(store.userId)
         when {
             s.phase == "play" && s.isMyTurn(store.userId) && !awaitingMove -> {
@@ -871,20 +975,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             myTurn -> "Ваш ход"
             else -> "Ход соперника"
         }
+        // Показана не текущая позиция партии, а история или вариант: доска берётся из дерева ходов
+        val t = s.tree
+        val viewing = t != null && !t.live
+        val board = if (t != null && viewing) t.boardAt() else s.board
+        val siblings = t?.siblings() ?: emptyList()
         _game.value = GameUi(
             gameId = s.gameId,
             loaded = true,
             title = d.name,
             width = d.width,
             height = d.height,
-            cells = s.board.snapshot(),
-            lastMove = s.board.lastMove,
-            removed = s.removed,
-            pending = if (myTurn) pending else -1,
+            cells = board.snapshot(),
+            lastMove = board.lastMove,
+            removed = if (viewing) emptySet() else s.removed,
+            pending = if (myTurn && !viewing) pending else -1,
             blackName = label(d.black?.name, d.black?.rank),
             whiteName = label(d.white?.name, d.white?.rank),
-            blackCaptures = s.board.captures[0],
-            whiteCaptures = s.board.captures[1],
+            blackCaptures = board.captures[0],
+            whiteCaptures = board.captures[1],
             blackClock = clockText(s, Stone.BLACK, now),
             whiteClock = clockText(s, Stone.WHITE, now),
             toPlay = s.toPlay,
@@ -892,8 +1001,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             phase = s.phase,
             moveCount = s.moveCount,
             status = status,
-            canMove = socketReady && myTurn && !awaitingMove,
-            canRemove = socketReady && s.phase == "stone removal" && me != null,
+            canMove = socketReady && myTurn && !awaitingMove && !viewing,
+            canRemove = socketReady && s.phase == "stone removal" && me != null && !viewing,
+            viewMove = t?.cursor?.number ?: s.moveCount,
+            lineLength = t?.lineLength() ?: s.moveCount,
+            trunkLength = t?.trunkLength ?: s.moveCount,
+            live = !viewing,
+            analysis = t?.analysis ?: false,
+            inVariation = t != null && !t.cursor.trunk,
+            canPrev = t?.hasPrev ?: false,
+            canNext = t?.hasNext ?: false,
+            canDelete = t?.canDeleteBranch ?: false,
+            hasVariations = t?.hasVariations() ?: false,
+            analysisColor = t?.colorToPlay() ?: s.toPlay,
+            viewMoveLabel = t?.cursor?.move?.let { Coord.label(it.x, it.y, d.height) } ?: "",
+            choices = t?.branchChoices() ?: emptyList(),
+            siblingIndex = if (t != null) siblings.indexOfFirst { it === t.cursor } + 1 else 1,
+            siblingCount = siblings.size.coerceAtLeast(1),
+            showTree = treeOpen && t != null,
+            outline = if (treeOpen && t != null) t.outline() else emptyList(),
         )
     }
 

@@ -2,6 +2,8 @@ package com.example.ogsmini.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -157,5 +159,89 @@ class GameSessionTest {
         assertEquals(GameSession.MoveResult.APPLIED, s.applyMove(1, 4, 4))
         assertEquals(Stone.WHITE, s.board.get(4, 4))
         assertEquals(Stone.BLACK, s.toPlay)
+    }
+
+    // ---------- дерево ходов: просмотр истории и варианты ----------
+
+    private fun reload(s: GameSession, json: String) =
+        s.applyGameData(Wire.parseGameData(Wire.parseJson(json)!!)!!)
+
+    @Test
+    fun treeFollowsTheGameFromTheSnapshotAndFromNewMoves() {
+        val s = session(gamedata(moves = "[2,2,1],[6,6,1]", currentPlayer = 1))
+        val t = s.tree!!
+        assertEquals(2, t.trunkLength)
+        assertTrue(t.live)
+        assertEquals(listOf(Stone.BLACK, Stone.WHITE), t.line().drop(1).map { it.move!!.color })
+
+        assertEquals(GameSession.MoveResult.APPLIED, s.applyMove(3, 4, 4))
+        assertEquals(3, t.trunkLength)
+        assertTrue(t.live) // курсор пошёл за партией
+        assertEquals(s.board.snapshot().toList(), t.boardAt(t.trunkEnd).snapshot().toList())
+        assertEquals(s.toPlay, t.colorToPlay(t.trunkEnd))
+    }
+
+    @Test
+    fun newMovesDoNotInterruptBrowsingHistory() {
+        val s = session(gamedata(moves = "[2,2,1],[6,6,1],[4,4,1]"))
+        val t = s.tree!!
+        t.seek(1)
+        s.applyMove(4, 5, 5)
+        assertEquals(1, t.cursor.number)
+        assertFalse(t.live)
+        assertEquals(4, t.trunkLength)
+        // ход на доске партии при этом уже сыгран
+        assertEquals(Stone.WHITE, s.board.get(5, 5))
+    }
+
+    @Test
+    fun variationsSurviveReloadingTheSameGame() {
+        val s = session(gamedata(moves = "[2,2,1],[6,6,1]"))
+        val t = s.tree!!
+        t.seek(1)
+        t.enterAnalysis()
+        t.play(4, 4)
+        val variation = t.cursor
+
+        reload(s, gamedata(moves = "[2,2,1],[6,6,1],[4,5,1]"))
+        assertSame(t, s.tree) // то же дерево
+        assertEquals(3, t.trunkLength)
+        assertSame(variation, t.cursor) // в анализе курсор не сдвинулся
+        assertTrue(t.hasVariations())
+    }
+
+    @Test
+    fun undoShrinksTheMainLine() {
+        val s = session(gamedata(moves = "[2,2,1],[6,6,1],[4,4,1]"))
+        val t = s.tree!!
+        reload(s, gamedata(moves = "[2,2,1],[6,6,1]"))
+        assertSame(t, s.tree)
+        assertEquals(2, t.trunkLength)
+        assertEquals(2, s.moveCount)
+        assertTrue(t.live)
+    }
+
+    @Test
+    fun aDifferentSetupStartsANewTree() {
+        val s = session(gamedata(moves = "[2,2,1]"))
+        val old = s.tree
+        reload(s, gamedata(currentPlayer = 2, initialPlayer = "white", handicap = 2, initialBlack = "ddgg"))
+        assertNotSame(old, s.tree)
+        assertEquals(0, s.tree!!.trunkLength)
+        assertEquals(Stone.WHITE, s.tree!!.colorToPlay(s.tree!!.trunkEnd))
+        assertEquals(2, s.tree!!.boardAt(s.tree!!.root).snapshot().count { it != 0 })
+    }
+
+    @Test
+    fun freeHandicapTurnsInTheTreeMatchTheSession() {
+        val s = session(gamedata(handicap = 3, free = true))
+        val t = s.tree!!
+        for ((i, p) in listOf(0 to 0, 1 to 1, 2 to 2).withIndex()) {
+            assertEquals(s.toPlay, t.colorToPlay(t.trunkEnd))
+            s.applyMove(i + 1, p.first, p.second)
+        }
+        assertEquals(Stone.WHITE, s.toPlay)
+        assertEquals(Stone.WHITE, t.colorToPlay(t.trunkEnd))
+        assertEquals(listOf(Stone.BLACK, Stone.BLACK, Stone.BLACK), t.line().drop(1).map { it.move!!.color })
     }
 }

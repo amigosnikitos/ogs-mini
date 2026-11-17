@@ -40,6 +40,13 @@ class GameSession(val gameId: Long) {
     var clockOffsetMs: Long = 0
         private set
 
+    /**
+     * Дерево ходов: основная линия (ходы партии) и варианты, которые строит пользователь. Создаётся вместе с
+     * данными партии и дальше идёт за ними: каждый ход сервера попадает и в доску, и в дерево.
+     */
+    var tree: GameTree? = null
+        private set
+
     private var lastX = -2
     private var lastY = -2
     private var handicap = 0
@@ -52,11 +59,15 @@ class GameSession(val gameId: Long) {
         handicap = d.handicap
         freeHandicap = d.freeHandicap
         val b = GoBoard(d.width, d.height)
-        for ((x, y) in Coord.decodeAll(d.initialBlack)) b.setStone(x, y, Stone.BLACK)
-        for ((x, y) in Coord.decodeAll(d.initialWhite)) b.setStone(x, y, Stone.WHITE)
+        val black = Coord.decodeAll(d.initialBlack)
+        val white = Coord.decodeAll(d.initialWhite)
+        for ((x, y) in black) b.setStone(x, y, Stone.BLACK)
+        for ((x, y) in white) b.setStone(x, y, Stone.WHITE)
         var color = d.initialPlayer
+        val played = ArrayList<TreeMove>(d.moves.size)
         for ((i, m) in d.moves.withIndex()) {
             b.play(m.x, m.y, color)
+            played.add(TreeMove(color, m.x, m.y))
             color = nextToPlay(color, i)
         }
         board = b
@@ -69,6 +80,15 @@ class GameSession(val gameId: Long) {
         clock = d.clock
         outcome = d.outcome
         setRemoved(d.removed)
+
+        // Та же партия (повторная загрузка, отмена хода) — дерево и варианты сохраняются, меняется только хвост основной линии.
+        val setup = TreeSetup(d.width, d.height, black, white, d.initialPlayer, d.handicap, d.freeHandicap)
+        val existing = tree
+        if (existing != null && existing.setup == setup) {
+            existing.syncTrunk(played)
+        } else {
+            tree = GameTree(setup).also { it.syncTrunk(played) }
+        }
     }
 
     /**
@@ -85,6 +105,7 @@ class GameSession(val gameId: Long) {
         }
         val mover = toPlay
         board.play(x, y, mover)
+        tree?.appendTrunk(TreeMove(mover, x, y))
         toPlay = nextToPlay(mover, moveCount)
         moveCount++
         lastX = x
@@ -131,10 +152,8 @@ class GameSession(val gameId: Long) {
      * (`free_handicap_placement`): они делают подряд [handicap] ходов. Это то же правило, что в движке
      * официального клиента OGS.
      */
-    private fun nextToPlay(mover: Stone, movesBefore: Int): Stone {
-        val handicapMovesLeft = if (freeHandicap) maxOf(0, handicap - movesBefore) else 0
-        return if (handicapMovesLeft < 2) mover.other else mover
-    }
+    private fun nextToPlay(mover: Stone, movesBefore: Int): Stone =
+        TurnRules.next(mover, movesBefore, handicap, freeHandicap)
 
     // ---------- вопросы для интерфейса ----------
 

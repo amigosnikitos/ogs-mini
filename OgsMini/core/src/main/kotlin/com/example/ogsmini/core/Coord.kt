@@ -19,6 +19,15 @@ object Coord {
         return if (x < 0 || y < 0) null else Pair(x, y)
     }
 
+    private const val BOARD_COLUMNS = "ABCDEFGHJKLMNOPQRSTUVWXYZ" // как на доске: буквы I нет
+
+    /** Название точки как на доске: столбец буквой (без I), строка считается снизу. Пас — «Пас». */
+    fun label(x: Int, y: Int, height: Int): String {
+        if (x < 0 || y < 0) return "Пас"
+        val col = if (x < BOARD_COLUMNS.length) BOARD_COLUMNS[x].toString() else "?"
+        return "$col${height - y}"
+    }
+
     /** Строка вида "aabbcc" → список точек. Нераспознанные пары пропускаются. */
     fun decodeAll(s: String): List<Pair<Int, Int>> {
         val out = ArrayList<Pair<Int, Int>>()
